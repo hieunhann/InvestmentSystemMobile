@@ -1,0 +1,24 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Flutter/Dart specific
+*.dart text
+*.yaml text
+*.json text
+*.md text
+*.gradle text
+*.xml text
+*.plist text
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.jar binary
+*.so binary
+*.dylib binary
+*.a binary
