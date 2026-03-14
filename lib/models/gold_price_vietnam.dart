@@ -1,4 +1,4 @@
-/// Model cho giá vàng Việt Nam từ BTMC API
+/// Model for Vietnam Gold Price from BTMC API
 class GoldPriceVietnam {
   final String type;
   final String buy;
@@ -21,12 +21,12 @@ class GoldPriceVietnam {
     );
   }
 
-  // Chuyển đổi giá từ String sang double
+  // Convert price from String to double
   double get buyPrice => double.tryParse(buy.replaceAll(',', '')) ?? 0.0;
   double get sellPrice => double.tryParse(sell.replaceAll(',', '')) ?? 0.0;
 }
 
-/// Response từ BTMC API
+/// Response from BTMC API
 class BTMCApiResponse {
   final List<GoldPriceVietnam> prices;
   final String city;

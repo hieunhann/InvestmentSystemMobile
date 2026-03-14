@@ -6,14 +6,12 @@ class SocialIconRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    return Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 12.w,
+      runSpacing: 8.h,
       children: const [
-        _SocialIconButton(label: 'f'),
-        SizedBox(width: 18),
         _SocialIconButton(label: 'G'),
-        SizedBox(width: 18),
-        _SocialIconButton(label: 't'),
       ],
     );
   }
@@ -30,8 +28,8 @@ class _SocialIconButton extends StatelessWidget {
       onTap: () {},
       radius: 22.r,
       child: Container(
-        width: 34.w,
-        height: 34.w,
+        width: 32.w,
+        height: 32.w,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: Colors.transparent,

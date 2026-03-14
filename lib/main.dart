@@ -1,12 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:provider/provider.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:my_flutter_app/constants/app_colors.dart';
 import 'package:my_flutter_app/constants/app_strings.dart';
 import 'package:my_flutter_app/features/auth/bloc/auth_cubit.dart';
 import 'package:my_flutter_app/features/auth/presentation/screens/welcome_screen.dart';
+import 'package:my_flutter_app/providers/auth_provider.dart';
+import 'package:my_flutter_app/providers/market_data_provider.dart';
+import 'package:my_flutter_app/providers/user_provider.dart';
+import 'package:my_flutter_app/services/notification_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Khởi tạo Firebase
+  try {
+    await Firebase.initializeApp();
+    print('✅ Firebase initialized successfully');
+    await NotificationService.initialize();
+  } catch (e) {
+    print('⚠️ Firebase initialization error (maybe missing google-services.json): $e');
+  }
+  
   runApp(const MyApp());
 }
 
@@ -15,17 +31,18 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Sử dụng ScreenUtilInit để khởi tạo responsive design
     return ScreenUtilInit(
-      // Design size (kích thước thiết kế chuẩn - thường là iPhone 11 Pro)
       designSize: const Size(375, 812),
-      // Tự động scale text theo kích thước màn hình
       minTextAdapt: true,
-      // Split screen mode support
       splitScreenMode: true,
       builder: (context, child) {
-        return BlocProvider(
-          create: (_) => AuthCubit(),
+        return MultiProvider(
+          providers: [
+            BlocProvider(create: (_) => AuthCubit()),
+            ChangeNotifierProvider(create: (_) => AuthProvider()),
+            ChangeNotifierProvider(create: (_) => MarketDataProvider()),
+            ChangeNotifierProvider(create: (_) => UserProvider()),
+          ],
           child: MaterialApp(
             title: AppStrings.appName,
             debugShowCheckedModeBanner: false,

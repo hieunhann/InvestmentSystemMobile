@@ -7,6 +7,7 @@ class AppHeader extends StatelessWidget {
   final String? subtitle;
   final Widget? trailing;
   final Widget? bottom;
+  final String? username;
 
   const AppHeader({
     super.key,
@@ -14,6 +15,7 @@ class AppHeader extends StatelessWidget {
     this.subtitle,
     this.trailing,
     this.bottom,
+    this.username,
   });
 
   @override
@@ -60,16 +62,39 @@ class AppHeader extends StatelessWidget {
                   ],
                 ),
               ),
-              if (trailing != null) trailing!,
+              if (username != null)
+                Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 12.w,
+                    vertical: 6.h,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(20.r),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.person, color: Colors.white, size: 16.sp),
+                      SizedBox(width: 6.w),
+                      Text(
+                        username!,
+                        style: TextStyle(
+                          fontSize: 12.sp,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else if (trailing != null)
+                trailing!,
             ],
           ),
-          if (bottom != null) ...[
-            SizedBox(height: 12.h),
-            bottom!,
-          ],
+          if (bottom != null) ...[SizedBox(height: 12.h), bottom!],
         ],
       ),
     );
   }
 }
-

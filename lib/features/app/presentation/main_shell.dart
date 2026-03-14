@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:my_flutter_app/constants/app_colors.dart';
+import 'package:my_flutter_app/features/app/bloc/analytics_cubit.dart';
+import 'package:my_flutter_app/features/app/bloc/portfolio_cubit.dart';
 import 'package:my_flutter_app/features/app/bloc/public_market_cubit.dart';
 import 'package:my_flutter_app/features/app/presentation/screens/account_screen.dart';
-import 'package:my_flutter_app/features/app/presentation/screens/analytics_screen.dart';
-import 'package:my_flutter_app/features/app/presentation/screens/news_screen.dart';
 import 'package:my_flutter_app/features/app/presentation/screens/portfolio_screen.dart';
 import 'package:my_flutter_app/features/app/presentation/screens/public_market_screen.dart';
+import 'package:my_flutter_app/features/auth/bloc/auth_cubit.dart';
 import 'package:my_flutter_app/services/gold_price_service.dart';
 
 class MainShell extends StatefulWidget {
@@ -21,8 +22,16 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) => PublicMarketCubit(GoldPriceService()),
+    final userId = context.watch<AuthCubit>().state.user?.id ?? '';
+
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider(create: (_) => PublicMarketCubit(GoldPriceService())),
+        BlocProvider(
+          create: (_) => PortfolioCubit()..load(userId: userId),
+        ),
+        BlocProvider(create: (_) => AnalyticsCubit()..load()),
+      ],
       child: Scaffold(
         backgroundColor: AppColors.appBackground,
         body: SafeArea(
@@ -32,8 +41,6 @@ class _MainShellState extends State<MainShell> {
             children: const [
               PublicMarketScreen(),
               PortfolioScreen(),
-              AnalyticsScreen(),
-              NewsScreen(),
               AccountScreen(),
             ],
           ),
@@ -45,10 +52,8 @@ class _MainShellState extends State<MainShell> {
           selectedItemColor: AppColors.primaryVariant,
           unselectedItemColor: Colors.black54,
           items: const [
-            BottomNavigationBarItem(icon: Icon(Icons.home_outlined), label: 'Home'),
+            BottomNavigationBarItem(icon: Icon(Icons.home_outlined), label: 'Market'),
             BottomNavigationBarItem(icon: Icon(Icons.wallet_outlined), label: 'Portfolio'),
-            BottomNavigationBarItem(icon: Icon(Icons.bar_chart_outlined), label: 'Analytics'),
-            BottomNavigationBarItem(icon: Icon(Icons.article_outlined), label: 'News'),
             BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: 'Account'),
           ],
         ),

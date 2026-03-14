@@ -1,21 +1,41 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:my_flutter_app/models/user.dart';
 
 /// API Service for handling HTTP requests
 class ApiService {
-  // Base URL - thay đổi theo API của bạn
-  static const String baseUrl = 'https://api.example.com';
+  ApiService();
+
+  // Override bằng: flutter run --dart-define=API_BASE_URL=http://<host>:8080
+  static const String _envBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
+
+  // Mặc định: desktop/web dùng localhost, Android emulator dùng 10.0.2.2
+  static final String baseUrl = _envBaseUrl.isNotEmpty
+      ? _envBaseUrl
+      : (kIsWeb ||
+              (defaultTargetPlatform == TargetPlatform.windows) ||
+              (defaultTargetPlatform == TargetPlatform.macOS)
+          ? 'http://localhost:8080'
+          : 'http://10.0.2.2:8080');
 
   // Timeout duration
   static const Duration timeoutDuration = Duration(seconds: 30);
 
+  static String? _accessToken;
+
+  static void setAccessToken(String? token) {
+    _accessToken = token;
+  }
+
+  static String? get accessToken => _accessToken;
+
   /// GET request
-  Future<dynamic> get(String endpoint) async {
+  Future<dynamic> get(String endpoint, {bool authorized = false}) async {
     try {
       final url = Uri.parse('$baseUrl$endpoint');
       final response = await http
-          .get(url, headers: _getHeaders())
+          .get(url, headers: _getHeaders(authorized: authorized))
           .timeout(timeoutDuration);
 
       return _handleResponse(response);
@@ -25,11 +45,19 @@ class ApiService {
   }
 
   /// POST request
-  Future<dynamic> post(String endpoint, Map<String, dynamic> data) async {
+  Future<dynamic> post(
+    String endpoint,
+    Map<String, dynamic> data, {
+    bool authorized = false,
+  }) async {
     try {
       final url = Uri.parse('$baseUrl$endpoint');
       final response = await http
-          .post(url, headers: _getHeaders(), body: jsonEncode(data))
+          .post(
+            url,
+            headers: _getHeaders(authorized: authorized),
+            body: jsonEncode(data),
+          )
           .timeout(timeoutDuration);
 
       return _handleResponse(response);
@@ -39,11 +67,19 @@ class ApiService {
   }
 
   /// PUT request
-  Future<dynamic> put(String endpoint, Map<String, dynamic> data) async {
+  Future<dynamic> put(
+    String endpoint,
+    Map<String, dynamic> data, {
+    bool authorized = false,
+  }) async {
     try {
       final url = Uri.parse('$baseUrl$endpoint');
       final response = await http
-          .put(url, headers: _getHeaders(), body: jsonEncode(data))
+          .put(
+            url,
+            headers: _getHeaders(authorized: authorized),
+            body: jsonEncode(data),
+          )
           .timeout(timeoutDuration);
 
       return _handleResponse(response);
@@ -53,11 +89,11 @@ class ApiService {
   }
 
   /// DELETE request
-  Future<dynamic> delete(String endpoint) async {
+  Future<dynamic> delete(String endpoint, {bool authorized = false}) async {
     try {
       final url = Uri.parse('$baseUrl$endpoint');
       final response = await http
-          .delete(url, headers: _getHeaders())
+          .delete(url, headers: _getHeaders(authorized: authorized))
           .timeout(timeoutDuration);
 
       return _handleResponse(response);
@@ -67,37 +103,53 @@ class ApiService {
   }
 
   /// Get headers
-  Map<String, String> _getHeaders() {
-    return {
+  Map<String, String> _getHeaders({required bool authorized}) {
+    final headers = <String, String>{
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      // Thêm authorization token nếu cần
-      // 'Authorization': 'Bearer $token',
     };
+
+    if (authorized && _accessToken != null && _accessToken!.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $_accessToken';
+    }
+
+    return headers;
   }
 
   /// Handle HTTP response
   dynamic _handleResponse(http.Response response) {
-    switch (response.statusCode) {
-      case 200:
-      case 201:
-        if (response.body.isEmpty) {
-          return null;
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      if (response.body.isEmpty) {
+        return null;
+      }
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic> && decoded.containsKey('success')) {
+        final success = decoded['success'] == true;
+        if (!success) {
+          final message = decoded['message']?.toString() ?? 'Request failed.';
+          throw Exception(message);
         }
-        return jsonDecode(response.body);
-      case 400:
-        throw Exception('Bad request: ${response.body}');
-      case 401:
-        throw Exception('Unauthorized: ${response.body}');
-      case 403:
-        throw Exception('Forbidden: ${response.body}');
-      case 404:
-        throw Exception('Not found: ${response.body}');
-      case 500:
-        throw Exception('Server error: ${response.body}');
-      default:
-        throw Exception('Error: ${response.statusCode} - ${response.body}');
+        return decoded['data'] ?? decoded;
+      }
+
+      return decoded;
     }
+
+    final body = response.body;
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic>) {
+        final message = decoded['message']?.toString();
+        if (message != null && message.isNotEmpty) {
+          throw Exception(message);
+        }
+      }
+    } catch (_) {
+      // Keep raw body fallback below.
+    }
+
+    throw Exception('HTTP ${response.statusCode}: $body');
   }
 
   /// Handle errors

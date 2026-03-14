@@ -638,28 +638,4 @@ class _GoldPriceScreenState extends State<GoldPriceScreen> {
     );
   }
 
-  Widget _buildRateColumn(String label, String value, Color color) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11.sp,
-              color: Colors.grey[600],
-            ),
-          ),
-          SizedBox(height: 4.h),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 13.sp,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }

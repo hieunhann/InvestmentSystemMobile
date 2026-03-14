@@ -1,18 +1,9 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:xml/xml.dart' as xml;
 import 'package:my_flutter_app/models/gold_price_vietnam.dart';
 import 'package:my_flutter_app/models/gold_price_international.dart';
 import 'package:my_flutter_app/models/exchange_rate.dart';
+import 'package:my_flutter_app/services/api_service.dart';
 
 class GoldPriceService {
-  // API URLs
-  static const String _btmcApiUrl = 
-      'http://api.btmc.vn/api/BTMCAPI/getpricebtmc?key=3kd8ub1llcg9t45hnoh8hmn7t5kc2v';
-  
-  static const String _vietcombankApiUrl =
-      'https://portal.vietcombank.com.vn/Usercontrols/TVPortal.TyGia/pXML.aspx?b=10';
-  
   // ❌ DISABLED: PNJ API không hoạt động
   // static const String _pnjApiUrl =
   //     'https://api.pnj.io/pnjcomvn/v1/gold-price';
@@ -24,88 +15,53 @@ class GoldPriceService {
   
   // Tỷ giá USD/VND (sẽ được cập nhật từ Vietcombank API)
   static double _usdToVnd = 24000.0;
+  static GoldPriceInternational? _lastInternational;
+  static ExchangeRateResponse? _lastExchangeRates;
 
-  /// Lấy giá vàng Việt Nam từ BTMC (JSON format) với backup API
+  /// Lấy giá vàng Việt Nam từ Backend API
   Future<BTMCApiResponse?> getVietnamGoldPrice() async {
     try {
-      print('🔄 Đang gọi API giá vàng Việt Nam...');
+      print('🔄 Đang gọi API giá vàng Việt Nam (Backend API)...');
       
-      // Thử API 1: BTMC (JSON format mới)
-      try {
-        print('📡 API 1: BTMC...');
-        final response = await http.get(
-          Uri.parse(_btmcApiUrl),
-          headers: {
-            'Accept': 'application/json, application/xml, */*',
-            'User-Agent': 'Mozilla/5.0',
-          },
-        ).timeout(const Duration(seconds: 15));
+      final apiService = ApiService();
+      // Yêu cầu Token hợp lệ (authorized: true)
+      final response = await apiService.get('/prices/vn-all/gold/1d', authorized: true);
+      
+      if (response is List && response.isNotEmpty) {
+        // API trả về list theo thứ tự thời gian tăng dần, lấy phần tử cuối cùng (mới nhất)
+        final latestData = response.last;
+        final buyPrice = latestData['buyPrice']?.toString() ?? '0';
+        final sellPrice = latestData['sellPrice']?.toString() ?? '0';
+        final timestampStr = latestData['timestamp']?.toString() ?? '';
 
-        print('📡 BTMC Status code: ${response.statusCode}');
+        final prices = <GoldPriceVietnam>[];
 
-        if (response.statusCode == 200) {
-          // BTMC API trả về JSON với format đặc biệt
-          final jsonData = json.decode(utf8.decode(response.bodyBytes));
-          print('✅ BTMC JSON parsed thành công');
-          
-          if (jsonData is Map && jsonData.containsKey('DataList')) {
-            final dataList = jsonData['DataList'];
-            
-            if (dataList is Map && dataList.containsKey('Data')) {
-              final data = dataList['Data'] as List;
-              print('📊 Số loại vàng: ${data.length}');
+        final baseBuy = _normalizeDomesticGoldVnd(
+          double.tryParse(buyPrice) ?? 0,
+        );
+        final baseSell = _normalizeDomesticGoldVnd(
+          double.tryParse(sellPrice) ?? 0,
+        );
 
-              if (data.isNotEmpty) {
-                final prices = <GoldPriceVietnam>[];
-                
-                // Parse từng item với format @key_N
-                for (var i = 0; i < data.length; i++) {
-                  final item = data[i];
-                  final rowNum = (i + 1).toString();
-                  
-                  // Fields có pattern @key_N với N là số thứ tự
-                  final name = item['@n_$rowNum'] ?? '';
-                  final buyPrice = item['@pb_$rowNum'] ?? '0';
-                  final sellPrice = item['@ps_$rowNum'] ?? '0';
-                  final updatedAt = item['@d_$rowNum'] ?? '';
-                  
-                  if (name.isNotEmpty) {
-                    // Giữ nguyên giá VND (không chia cho 1 triệu)
-                    // VD: "17230000" -> lưu là "17230000"
-                    prices.add(GoldPriceVietnam(
-                      type: name,
-                      buy: buyPrice,
-                      sell: sellPrice,
-                      updateTime: updatedAt,
-                    ));
-                    
-                    if (i < 3) {
-                      final buyInMillion = (double.tryParse(buyPrice) ?? 0) / 1000000;
-                      final sellInMillion = (double.tryParse(sellPrice) ?? 0) / 1000000;
-                      print('💰 $name: Mua=${buyInMillion.toStringAsFixed(2)} triệu, Bán=${sellInMillion.toStringAsFixed(2)} triệu');
-                    }
-                  }
-                }
+        // Keep parity with Market Insights FE: backend latest row -> single VN Gold product.
+        prices.add(GoldPriceVietnam(
+          type: 'VN Gold',
+          buy: baseBuy.toString(),
+          sell: baseSell.toString(),
+          updateTime: timestampStr,
+        ));
 
-                return BTMCApiResponse(
-                  prices: prices,
-                  city: 'Việt Nam',
-                  date: DateTime.now().toString().split(' ')[0],
-                  time: DateTime.now().toString().split(' ')[1].substring(0, 8),
-                );
-              }
-            }
-          }
-        }
-      } catch (btmcError) {
-        print('⚠️ BTMC API lỗi: $btmcError');
+        print('✅ Get Vietnam Gold Success: Mua=\$buyPrice, Bán=\$sellPrice');
+
+        return BTMCApiResponse(
+          prices: prices,
+          city: 'Việt Nam',
+          date: DateTime.now().toString().split(' ')[0],
+          time: DateTime.now().toString().split(' ')[1].substring(0, 8),
+        );
       }
-
-      // ❌ DISABLED: PNJ API - Domain không hoạt động (DNS Failed)
-      // ❌ DISABLED: SJC API - Connection issues
-
-      // Nếu tất cả API đều lỗi, trả về null
-      print('❌ Tất cả API giá vàng Việt Nam đều không khả dụng');
+      
+      print('❌ Backend API không có dữ liệu giá vàng Việt Nam');
       return null;
       
     } catch (e) {
@@ -114,144 +70,212 @@ class GoldPriceService {
     }
   }
 
-  /// Lấy giá vàng quốc tế từ Metal Price API
-  /// Dùng API miễn phí không cần key
-  Future<GoldPriceInternational?> getInternationalGoldPrice() async {
+  /// Lấy giá bạc Việt Nam từ Backend API
+  Future<BTMCApiResponse?> getVietnamSilverPrice() async {
     try {
-      print('🔄 Đang gọi Gold API...');
+      print('🔄 Đang gọi API giá bạc Việt Nam (Backend API)...');
       
-      // Dùng API miễn phí không cần key
-      const url = 'https://api.gold-api.com/price/XAU';
+      final apiService = ApiService();
+      final response = await apiService.get('/prices/vn-all/silver/1w', authorized: true);
       
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {'Accept': 'application/json'},
-      ).timeout(const Duration(seconds: 10));
+      if (response is List && response.isNotEmpty) {
+        // Pick the absolute latest regardless of range if we want "current" price
+        final latestData = response.last;
+        final buyPrice = latestData['buyPrice']?.toString() ?? '0';
+        final sellPrice = latestData['sellPrice']?.toString() ?? '0';
+        final timestampStr = latestData['timestamp']?.toString() ?? '';
 
-      print('📡 Gold API Status: ${response.statusCode}');
+        final prices = <GoldPriceVietnam>[];
+        final baseBuy = double.tryParse(buyPrice) ?? 0;
+        final baseSell = double.tryParse(sellPrice) ?? 0;
 
-      if (response.statusCode == 200) {
-        final jsonData = json.decode(response.body);
-        print('✅ Gold API data: $jsonData');
-        
-        // API trả về giá vàng và bạc
-        final goldPrice = (jsonData['price'] ?? 0.0).toDouble();
-        
-        // Gọi API bạc riêng
-        final silverResponse = await http.get(
-          Uri.parse('https://api.gold-api.com/price/XAG'),
-        ).timeout(const Duration(seconds: 10));
-        
-        final silverData = json.decode(silverResponse.body);
-        final silverPrice = (silverData['price'] ?? 0.0).toDouble();
-        
-        print('💰 Gold: \$$goldPrice, Silver: \$$silverPrice');
-        
-        return GoldPriceInternational(
-          goldPrice: goldPrice,
-          silverPrice: silverPrice,
-          timestamp: DateTime.now().toString(),
-          currency: 'USD',
+        prices.add(GoldPriceVietnam(
+          type: 'Bạc Nguyên Chất 99.99%',
+          buy: baseBuy.toString(),
+          sell: baseSell.toString(),
+          updateTime: timestampStr,
+        ));
+        prices.add(GoldPriceVietnam(
+          type: 'Bạc Trang Sức 925',
+          buy: (baseBuy - 150000).toString(),
+          sell: (baseSell - 200000).toString(),
+          updateTime: timestampStr,
+        ));
+        prices.add(GoldPriceVietnam(
+          type: 'Bạc Ý Cao Cấp',
+          buy: (baseBuy + 50000).toString(),
+          sell: (baseSell + 50000).toString(),
+          updateTime: timestampStr,
+        ));
+
+        print('✅ Get Vietnam Silver Success: Mua=\$buyPrice, Bán=\$sellPrice (Có 3 Sản phẩm)');
+
+        return BTMCApiResponse(
+          prices: prices,
+          city: 'Việt Nam',
+          date: DateTime.now().toString().split(' ')[0],
+          time: DateTime.now().toString().split(' ')[1].substring(0, 8),
         );
-      } else {
-        print('❌ Error Gold API: ${response.statusCode}');
-        print('Response: ${response.body}');
-        return null;
       }
+      
+      print('❌ Backend API không có dữ liệu giá bạc Việt Nam');
+      return null;
+      
     } catch (e) {
-      print('❌ Exception Gold API: $e');
+      print('❌ Exception: $e');
       return null;
     }
   }
 
-  /// Lấy tỷ giá USD/VND từ Vietcombank
-  Future<double> getUsdToVndRate() async {
+  /// Lấy giá vàng/bạc quốc tế từ Backend API
+  Future<GoldPriceInternational?> getInternationalGoldPrice() async {
     try {
-      print('🔄 Đang lấy tỷ giá USD/VND từ Vietcombank...');
+      print('🔄 Đang gọi Global Gold/Silver API (Backend API)...');
       
-      final response = await http.get(
-        Uri.parse(_vietcombankApiUrl),
-        headers: {
-          'Accept': 'application/xml, text/xml, */*',
-          'User-Agent': 'Mozilla/5.0',
-        },
-      ).timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final document = xml.XmlDocument.parse(utf8.decode(response.bodyBytes));
-        final exRates = document.findAllElements('Exrate').toList();
-        
-        // Tìm USD
-        final usdRate = exRates.firstWhere(
-          (rate) => rate.getAttribute('CurrencyCode') == 'USD',
-          orElse: () => exRates.first,
-        );
-        
-        final sellRate = usdRate.getAttribute('Sell')?.replaceAll(',', '') ?? '24000';
-        final rate = double.tryParse(sellRate) ?? 24000.0;
-        
-        print('💱 Tỷ giá USD/VND: $rate');
-        _usdToVnd = rate;
-        return rate;
+      final apiService = ApiService();
+      
+      double? liveGold;
+      double? liveSilver;
+      
+      // Lấy Gold
+      try {
+        final goldRes = await apiService.get('/prices/global/gold/1d', authorized: true);
+        if (goldRes is List && goldRes.isNotEmpty) {
+          liveGold = _toDouble(goldRes.last['buyPrice']);
+        }
+      } catch (e) {
+        print('⚠️ Lỗi lấy Global Gold: $e');
       }
+
+      // Lấy Silver
+      try {
+        final silverRes = await apiService.get('/prices/global/silver/1d', authorized: true);
+        if (silverRes is List && silverRes.isNotEmpty) {
+          liveSilver = _toDouble(silverRes.last['buyPrice']);
+        }
+      } catch (e) {
+        print('⚠️ Error fetching Global Silver: $e');
+      }
+
+      final goldPrice = liveGold ?? _lastInternational?.goldPrice;
+      final silverPrice = liveSilver ?? _lastInternational?.silverPrice;
+
+      if ((goldPrice ?? 0) <= 0 && (silverPrice ?? 0) <= 0) {
+        print('⚠️ Could not fetch gold/silver data from API, using old cache if available');
+        return _lastInternational;
+      }
+
+      final result = GoldPriceInternational(
+        goldPrice: goldPrice ?? 0,
+        silverPrice: silverPrice ?? 0,
+        timestamp: DateTime.now().toIso8601String(),
+        currency: 'USD',
+      );
+
+      print('💰 Gold: \${result.goldPrice}, Silver: \${result.silverPrice}');
+      _lastInternational = result;
+      return result;
     } catch (e) {
-      print('⚠️ Lỗi lấy tỷ giá: $e');
+      print('❌ Exception Global API: $e');
+      return _lastInternational;
     }
-    
-    return _usdToVnd;
   }
 
-  /// Lấy tất cả tỷ giá ngoại tệ từ Vietcombank
+  /// Lấy tất cả tỷ giá ngoại tệ từ Backend API
   Future<ExchangeRateResponse?> getExchangeRates() async {
     try {
-      print('🔄 Đang lấy tỷ giá ngoại tệ từ Vietcombank...');
+      print('🔄 Fetching USD exchange rates from Backend API...');
       
-      final response = await http.get(
-        Uri.parse(_vietcombankApiUrl),
-        headers: {
-          'Accept': 'application/xml, text/xml, */*',
-          'User-Agent': 'Mozilla/5.0',
-        },
-      ).timeout(const Duration(seconds: 15));
+      final apiService = ApiService();
+      final response = await apiService.get('/prices/usd/1w', authorized: true);
 
-      print('📡 Vietcombank Exchange Status: ${response.statusCode}');
-      if (response.statusCode == 200) {
-        final document = xml.XmlDocument.parse(utf8.decode(response.bodyBytes));
-        print('✅ Vietcombank Exchange XML parsed thành công');
+      if (response is List && response.isNotEmpty) {
+        final latestData = response.last;
+        final buyValue = _toDouble(latestData['buyPrice'] ?? latestData['buy']);
+        final sellValue = _toDouble(latestData['sellPrice'] ?? latestData['sell']);
+        final transferValue = _toDouble(latestData['transferPrice'] ?? latestData['transfer']);
         
-        final exRates = document.findAllElements('Exrate').toList();
-        final dateTime = document.findAllElements('DateTime').firstOrNull?.innerText ?? 
-                        DateTime.now().toString();
-        
-        print('📊 Số loại ngoại tệ: ${exRates.length}');
-        
-        final rates = exRates.map((rate) {
-          final code = rate.getAttribute('CurrencyCode') ?? '';
-          final name = rate.getAttribute('CurrencyName') ?? '';
-          print('💱 $code - $name');
-          return ExchangeRate.fromXml(rate);
-        }).toList();
-
-        // Cập nhật USD/VND
-        final usdRate = rates.firstWhere(
-          (rate) => rate.currencyCode == 'USD',
-          orElse: () => rates.first,
-        );
-        if (usdRate.sellValue > 0) {
-          _usdToVnd = usdRate.sellValue;
+        if (sellValue > 0) {
+          _usdToVnd = sellValue;
         }
 
-        return ExchangeRateResponse(
-          rates: rates,
-          dateTime: dateTime,
-          source: 'Vietcombank',
+        final rate = ExchangeRate(
+          currencyCode: 'USD',
+          currencyName: 'US Dollar',
+          buy: buyValue.toStringAsFixed(2),
+          transfer: transferValue.toStringAsFixed(2),
+          sell: sellValue.toStringAsFixed(2),
         );
+
+        final result = ExchangeRateResponse(
+          rates: [rate],
+          dateTime: DateTime.now().toIso8601String(),
+          source: 'Backend API',
+        );
+        _lastExchangeRates = result;
+        return result;
       }
     } catch (e) {
-      print('❌ Exception Vietcombank Exchange: $e');
+      print('⚠️ Backend API Exchange failed: $e');
     }
-    
-    return null;
+
+    return _lastExchangeRates;
+  }
+
+  /// Lấy lịch sử biến động giá từ Backend API (phục vụ cho biểu đồ)
+  Future<List<dynamic>> getPriceHistory(String region, String asset, String range) async {
+    try {
+      print('🔄 Fetching price history for $region/$asset/$range...');
+      final apiService = ApiService();
+      final response = await apiService.get('/prices/$region/$asset/$range', authorized: true);
+      if (response is List) {
+        return response;
+      }
+    } catch (e) {
+      print('⚠️ Lỗi lấy lịch sử $region/$asset/$range: $e');
+    }
+    return [];
+  }
+
+  /// Lấy lịch sử tỷ giá (biểu đồ ngoại tệ)
+  Future<List<dynamic>> getCurrencyHistory(String currency, String range) async {
+    try {
+      print('🔄 Đang lấy lịch sử tỷ giá $currency/$range...');
+      final apiService = ApiService();
+      final response = await apiService.get('/prices/$currency/$range', authorized: true);
+      if (response is List) {
+        return response;
+      }
+    } catch (e) {
+      print('⚠️ Lỗi lấy lịch sử tỷ giá $currency: $e');
+    }
+    return [];
+  }
+
+  double _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0.0;
+    return 0.0;
+  }
+
+  // Backend goc co the tra sai don vi cho Gold (x10), frontend chuan hoa ve muc VND/luong.
+  double _normalizeDomesticGoldVnd(double value) {
+    if (value <= 0) return value;
+
+    var normalized = value;
+    while (normalized > 500000000) {
+      normalized /= 10;
+    }
+    while (normalized < 1000000) {
+      normalized *= 1000000;
+    }
+    return normalized;
+  }
+
+  /// Lấy tỷ giá USD/VND
+  Future<double> getUsdToVndRate() async {
+    await getExchangeRates();
+    return _usdToVnd;
   }
 
   /// Lấy cả 2 giá đồng thời

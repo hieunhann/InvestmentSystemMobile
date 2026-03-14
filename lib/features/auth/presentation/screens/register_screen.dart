@@ -46,6 +46,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
               MaterialPageRoute(builder: (_) => const MainShell()),
               (_) => false,
             );
+          } else if (state.status == AuthStatus.failure && state.message != null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(state.message!)),
+            );
           }
         },
         builder: (context, state) {

@@ -23,7 +23,25 @@ class GoldPriceInternational {
     );
   }
 
-  // Chuyển đổi từ USD/oz sang VND/chỉ (1 oz = 31.1035 gram, 1 chỉ = 3.75 gram)
+  // Chuyển đổi sang VND
+  double goldPricePerOzInVND(double usdToVndRate) {
+    return goldPrice * usdToVndRate;
+  }
+
+  double goldPricePerTaelInVND(double usdToVndRate) {
+    // 1 oz = 1.20565 lượng (tael)
+    return goldPrice * usdToVndRate * 1.20565;
+  }
+
+  double silverPricePerOzInVND(double usdToVndRate) {
+    return silverPrice * usdToVndRate;
+  }
+
+  double silverPricePerTaelInVND(double usdToVndRate) {
+    return silverPrice * usdToVndRate * 1.20565;
+  }
+
+  // Legacy/Helper methods (per Chỉ - 3.75g)
   double goldPriceInVND(double usdToVndRate) {
     if (goldPrice == 0) return 0;
     const ozToGram = 31.1035;
