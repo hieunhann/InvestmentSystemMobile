@@ -281,7 +281,7 @@ class PublicMarketCubit extends Cubit<PublicMarketState> {
           // Calculate normalized VND price (Ounce)
           final rate = historicalRates[key] ?? usdToVnd;
           final normalizedVnd =
-              rate > 0 ? (priceUsd * rate) / 1000000 : null;
+              rate > 0 ? (priceUsd * rate * 1.20565) / 1000000 : null;
 
           alignedGold[key] = MarketSnapshot(
             at: existing?.at ?? getDateTime(item),
@@ -318,7 +318,7 @@ class PublicMarketCubit extends Cubit<PublicMarketState> {
           // Calculate normalized VND price (Ounce)
           final rate = historicalRates[key] ?? usdToVnd;
           final normalizedVnd =
-              rate > 0 ? (priceUsd * rate) / 1000000 : null;
+              rate > 0 ? (priceUsd * rate * 32.1507) / 1000000 : null;
 
           alignedSilver[key] = MarketSnapshot(
             at: existing?.at ?? getDateTime(item),

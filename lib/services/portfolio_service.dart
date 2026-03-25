@@ -1,3 +1,4 @@
+import 'package:my_flutter_app/models/portfolio_report.dart';
 import 'package:my_flutter_app/services/api_service.dart';
 import 'dart:convert';
 
@@ -320,4 +321,34 @@ class PortfolioService {
       return false;
     }
   }
+
+  /// GET /portfolio/report/{userId} — fetch the last AI-generated report
+  Future<PortfolioReport?> fetchLatestReport({required String userId}) async {
+    final resolvedUserId = await _resolveUserId(userId);
+    try {
+      final response = await _api.get('/portfolio/report/$resolvedUserId', authorized: true);
+      if (response is Map<String, dynamic>) {
+        return PortfolioReport.fromJson(response);
+      }
+      return null;
+    } catch (e) {
+      if (e.toString().contains('404')) return null;
+      rethrow;
+    }
+  }
+
+  /// POST /portfolio/report/{userId}/generate — trigger AI analysis
+  Future<PortfolioReport> generateAIAnalysis({required String userId}) async {
+    final resolvedUserId = await _resolveUserId(userId);
+    final response = await _api.post(
+      '/portfolio/report/$resolvedUserId/generate',
+      {}, // empty body, matches FE
+      authorized: true,
+    );
+    if (response is Map<String, dynamic>) {
+      return PortfolioReport.fromJson(response);
+    }
+    throw Exception('Invalid response from AI analysis endpoint.');
+  }
 }
+

@@ -3,12 +3,17 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:intl/intl.dart';
 import 'package:my_flutter_app/constants/app_colors.dart';
+import 'package:my_flutter_app/constants/news_data.dart';
+import 'package:my_flutter_app/models/news_article.dart';
 import 'package:my_flutter_app/features/app/bloc/public_market_cubit.dart';
 import 'package:my_flutter_app/features/app/presentation/widgets/app_card.dart';
 import 'package:my_flutter_app/features/app/presentation/widgets/app_header.dart';
-import 'package:my_flutter_app/features/app/presentation/widgets/simple_line_chart.dart';
+import 'package:my_flutter_app/features/app/presentation/widgets/market_buy_sell_chart.dart';
+import 'package:my_flutter_app/features/app/presentation/widgets/market_chart_panel.dart';
 import 'package:flutter/services.dart';
 import 'package:my_flutter_app/features/auth/bloc/auth_cubit.dart';
+import 'dart:math';
+
 
 class _MarketPrice {
   final String type;
@@ -33,8 +38,19 @@ class PublicMarketScreen extends StatefulWidget {
 
 class _PublicMarketScreenState extends State<PublicMarketScreen> {
   int _tabIndex = 0;
-  String _goldPriceType = 'domestic'; // 'domestic' or 'world'
-  String _silverPriceType = 'domestic'; // 'domestic' or 'world'
+  late ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -86,15 +102,14 @@ class _PublicMarketScreenState extends State<PublicMarketScreen> {
         vietnamSilverPrices.isEmpty ? null : vietnamSilverPrices.first;
 
     final usdToVnd = marketState.usdToVnd;
-    final worldGoldUsd = marketState.international?.goldPrice ?? 0.0;
-    final worldSilverUsd = marketState.international?.silverPrice ?? 0.0;
     final worldGoldVnd =
         usdToVnd > 0
-            ? (marketState.international?.goldPricePerOzInVND(usdToVnd) ?? 0.0)
+            ? (marketState.international?.goldPricePerTaelInVND(usdToVnd) ??
+                0.0)
             : 0.0;
     final worldSilverVnd =
         usdToVnd > 0
-            ? (marketState.international?.silverPricePerOzInVND(usdToVnd) ??
+            ? (marketState.international?.silverPricePerKgInVND(usdToVnd) ??
                 0.0)
             : 0.0;
 
@@ -165,44 +180,41 @@ class _PublicMarketScreenState extends State<PublicMarketScreen> {
     final chartDomesticSilverSell = _safeSeries(silverDSell);
     final chartWorldSilver = _safeSeries(silverW);
 
-    final domesticPriceChange =
-        chartDomesticSell.length >= 2
-            ? ((chartDomesticSell.last -
-                        chartDomesticSell[chartDomesticSell.length - 2]) /
-                    chartDomesticSell[chartDomesticSell.length - 2]) *
-                100
-            : 0.0;
-    final worldPriceChange =
-        chartWorld.length >= 2
-            ? ((chartWorld.last - chartWorld[chartWorld.length - 2]) /
-                    chartWorld[chartWorld.length - 2]) *
-                100
-            : 0.0;
+    // GOLD METRICS LOGIC (FE: useMarketInsights.js)
+    final domesticPriceChange = _getDelta(chartDomesticSell);
+    final worldPriceChange = _getDelta(chartWorld);
 
-    final domesticSilverPriceChange =
-        chartDomesticSilverSell.length >= 2
-            ? ((chartDomesticSilverSell.last -
-                        chartDomesticSilverSell[chartDomesticSilverSell.length -
-                            2]) /
-                    chartDomesticSilverSell[chartDomesticSilverSell.length -
-                        2]) *
-                100
-            : 0.0;
-    final worldSilverPriceChange =
-        chartWorldSilver.length >= 2
-            ? ((chartWorldSilver.last -
-                        chartWorldSilver[chartWorldSilver.length - 2]) /
-                    chartWorldSilver[chartWorldSilver.length - 2]) *
-                100
-            : 0.0;
+    // Premium logic: premium = domesticSell - worldLocalVnd
+    final List<double> goldPremiumSeries = [];
+    for (var e in marketState.history) {
+      if (e.domesticSell != null && e.worldPriceVnd != null) {
+        goldPremiumSeries.add(e.domesticSell! - (e.worldPriceVnd! * 1000000));
+      }
+    }
+    final latestGoldPremium = (sjc?.sellPrice ?? 0) - worldGoldVnd;
+    final goldPremiumChange = _getDelta(goldPremiumSeries);
 
-    final spreadGap = ((sjc?.sellPrice ?? 0) - worldGoldVnd).abs();
-    final spreadRisk =
-        spreadGap > 1500000 ? 'High' : (spreadGap > 500000 ? 'Medium' : 'Low');
+    // Correlation (1M)
+    final List<double> goldDSellHistory = marketState.history.where((e) => e.domesticSell != null).map((e) => e.domesticSell!).toList();
+    final List<double> goldWHistory = marketState.history.where((e) => e.worldPriceVnd != null).map((e) => e.worldPriceVnd! * 1000000).toList();
+    final goldCorrelation = _calcCorrelation(goldDSellHistory, goldWHistory);
 
-    final silverSpreadGap =
-        ((vnSilverBase?.sellPrice ?? 0) - worldSilverVnd).abs();
-    final silverSpreadRisk = silverSpreadGap > 1000000 ? 'High' : 'Low';
+    // SILVER METRICS LOGIC
+    final domesticSilverPriceChange = _getDelta(chartDomesticSilverSell);
+    final worldSilverPriceChange = _getDelta(chartWorldSilver);
+
+    final List<double> silverPremiumSeries = [];
+    for (var e in marketState.silverHistory) {
+      if (e.domesticSell != null && e.worldPriceVnd != null) {
+        silverPremiumSeries.add(e.domesticSell! - (e.worldPriceVnd! * 1000000));
+      }
+    }
+    final latestSilverPremium = (vnSilverBase?.sellPrice ?? 0) - worldSilverVnd;
+    final silverPremiumChange = _getDelta(silverPremiumSeries);
+
+    final List<double> silverDSellHistory = marketState.silverHistory.where((e) => e.domesticSell != null).map((e) => e.domesticSell!).toList();
+    final List<double> silverWHistory = marketState.silverHistory.where((e) => e.worldPriceVnd != null).map((e) => e.worldPriceVnd! * 1000000).toList();
+    final silverCorrelation = _calcCorrelation(silverDSellHistory, silverWHistory);
 
     final currencyHistoryList =
         marketState.currencyHistory
@@ -242,298 +254,169 @@ class _PublicMarketScreenState extends State<PublicMarketScreen> {
               children: [
                 if (_tabIndex == 0) ...[
                   // Gold Tab
-                  _DomesticCard(
-                    domesticSellPrice: sjc?.sellPrice ?? 0,
-                    domesticBuyPrice: sjc?.buyPrice ?? 0,
-                    domesticPriceChange: domesticPriceChange,
+                  const Text('MARKET INSIGHT BOARD', style: TextStyle(fontSize: 10, letterSpacing: 1.5, color: Colors.black54, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  const Text('Gold: Domestic SJC vs. International Spot', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.black87)),
+                  const SizedBox(height: 12),
+                  MarketMetricCards(
+                    metrics: buildGoldMetrics(
+                      domesticSell: sjc?.sellPrice ?? 0,
+                      worldLocal: worldGoldVnd,
+                      premium: latestGoldPremium,
+                      exchangeRate: usdToVnd,
+                      correlation: goldCorrelation,
+                      domesticChange: domesticPriceChange,
+                      worldChange: worldPriceChange,
+                      premiumChange: goldPremiumChange,
+                    ),
                   ),
-                  SizedBox(height: 12.h),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _WorldCard(
-                          metalType: 'gold',
-                          usdPrice: worldGoldUsd,
-                          vndPrice: worldGoldVnd,
-                          worldPriceChange: worldPriceChange,
-                        ),
-                      ),
-                      SizedBox(width: 12.w),
-                      Expanded(
-                        child: _SpreadCard(gap: spreadGap, risk: spreadRisk),
-                      ),
-                    ],
+                  MarketChartPanel(
+                    topWidget: _RangeToggles(
+                      selected: marketState.selectedRange,
+                      onChanged: (val) => context.read<PublicMarketCubit>().load(range: val),
+                    ),
+                    leftSeries: chartDomesticBuy, // Using buy price for tracking line roughly
+                    rightSeries: chartWorld,
+                    bars: List.generate(chartDomesticBuy.length, (i) {
+                      if (i < chartWorld.length && chartWorld[i] > 0) return chartDomesticBuy[i] - chartWorld[i];
+                      return 0.0;
+                    }),
+                    dates: marketState.history.map((s) => s.at).toList(),
+                    leftLabel: 'SJC Gold (VND/luong)',
+                    rightLabel: 'Spot Gold (VND/luong, converted)',
+                    barLabel: 'Domestic Premium (VND/Luong)',
+                    isLoading: marketState.isLoading,
+                    emptyText: 'No API history points available yet.',
                   ),
-                  SizedBox(height: 12.h),
+                  const SizedBox(height: 16),
                   AppCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          runSpacing: 10,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            Text(
-                              'Price Trend',
-                              style: TextStyle(
-                                fontSize: 12.sp,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.black87,
-                              ),
-                            ),
+                            const Text('Live Buy / Sell Trend', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                             _RangeToggles(
                               selected: marketState.selectedRange,
-                              onChanged: (val) {
-                                context.read<PublicMarketCubit>().load(
-                                  range: val,
-                                );
-                              },
+                              onChanged: (val) => context.read<PublicMarketCubit>().load(range: val),
                             ),
                           ],
                         ),
-                        SizedBox(height: 8.h),
-                        _PriceTypeToggle(
-                          selectedType: _goldPriceType,
-                          onChanged: (type) {
-                            setState(() {
-                              _goldPriceType = type;
-                            });
-                          },
-                        ),
-                        SizedBox(height: 12.h),
-                        SimpleLineChart(
-                          seriesA:
-                              _goldPriceType == 'domestic'
-                                  ? chartDomesticBuy
-                                  : chartWorld,
-                          seriesB:
-                              _goldPriceType == 'domestic'
-                                  ? chartDomesticSell
-                                  : const [],
-                        ),
-                        SizedBox(height: 10.h),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            _LegendDot(
-                              color: const Color(0xFF1976D2),
-                              label:
-                                  _goldPriceType == 'domestic'
-                                      ? 'Buy Price'
-                                      : 'International',
-                            ),
-                            if (_goldPriceType == 'domestic') ...[
-                              SizedBox(width: 16.w),
-                              _LegendDot(
-                                color: const Color(0xFFE53935),
-                                label: 'Sell Price',
-                              ),
-                            ],
-                          ],
+                        const SizedBox(height: 12),
+                        MarketBuySellChart(
+                          buySeries: chartDomesticBuy,
+                          sellSeries: chartDomesticSell,
+                          dates: marketState.history.map((s) => s.at).toList(),
+                          label: 'SJC Gold Buy / Sell Live',
+                          unitLabel: 'VND',
                         ),
                       ],
                     ),
                   ),
-                  SizedBox(height: 12.h),
-                  AppCard(
-                    child: Column(
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _SmallTab(label: 'Product', isActive: true),
-                            _SmallTab(label: 'Buy', isActive: false),
-                            _SmallTab(label: 'Sell', isActive: false),
-                          ],
-                        ),
-                        SizedBox(height: 12.h),
-                        if (vietnamPrices.isEmpty)
-                          Text(
-                            'No market rows from API.',
-                            style: TextStyle(
-                              fontSize: 11.sp,
-                              color: Colors.black54,
-                            ),
-                          )
-                        else
-                          ...vietnamPrices.map(
-                            (p) => _VietnamProductRow(price: p),
-                          ),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 6.h),
                 ] else if (_tabIndex == 1) ...[
                   // Silver Tab
-                  _DomesticCard(
-                    domesticSellPrice: vnSilverBase?.sellPrice ?? 0,
-                    domesticBuyPrice: vnSilverBase?.buyPrice ?? 0,
-                    domesticPriceChange: domesticSilverPriceChange,
+                  const Text('MARKET INSIGHT BOARD', style: TextStyle(fontSize: 10, letterSpacing: 1.5, color: Colors.black54, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  const Text('Silver: Phu Quy Domestic vs. International Spot', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.black87)),
+                  const SizedBox(height: 12),
+                  MarketMetricCards(
+                    metrics: buildSilverMetrics(
+                      domesticSell: vnSilverBase?.sellPrice ?? 0,
+                      worldLocal: worldSilverVnd,
+                      premium: latestSilverPremium,
+                      exchangeRate: usdToVnd,
+                      correlation: silverCorrelation,
+                      domesticChange: domesticSilverPriceChange,
+                      worldChange: worldSilverPriceChange,
+                      premiumChange: silverPremiumChange,
+                    ),
                   ),
-                  SizedBox(height: 12.h),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _WorldCard(
-                          metalType: 'silver',
-                          usdPrice: worldSilverUsd,
-                          vndPrice: worldSilverVnd,
-                          worldPriceChange: worldSilverPriceChange,
-                        ),
-                      ),
-                      SizedBox(width: 12.w),
-                      Expanded(
-                        child: _SpreadCard(
-                          gap: silverSpreadGap,
-                          risk: silverSpreadRisk,
-                        ),
-                      ),
-                    ],
+                  MarketChartPanel(
+                    topWidget: _RangeToggles(
+                      selected: marketState.selectedRange,
+                      onChanged: (val) => context.read<PublicMarketCubit>().load(range: val),
+                    ),
+                    leftSeries: chartDomesticSilverBuy,
+                    rightSeries: chartWorldSilver,
+                    bars: List.generate(chartDomesticSilverBuy.length, (i) {
+                      if (i < chartWorldSilver.length && chartWorldSilver[i] > 0) return chartDomesticSilverBuy[i] - chartWorldSilver[i];
+                      return 0.0;
+                    }),
+                    dates: marketState.silverHistory.map((s) => s.at).toList(),
+                    leftLabel: 'Phu Quy Silver (VND/kg)',
+                    rightLabel: 'Spot Silver (VND/kg, converted)',
+                    barLabel: 'Domestic Premium (VND/Kg)',
+                    isLoading: marketState.isLoading,
+                    emptyText: 'No silver history points available yet.',
                   ),
-                  SizedBox(height: 12.h),
+                  const SizedBox(height: 16),
                   if (vnSilverBase != null || worldSilverVnd > 0) ...[
                     AppCard(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          Wrap(
+                            alignment: WrapAlignment.spaceBetween,
+                            runSpacing: 10,
+                            crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              Text(
-                                'Price Trend',
-                                style: TextStyle(
-                                  fontSize: 12.sp,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.black87,
-                                ),
-                              ),
+                              const Text('Live Buy / Sell Trend', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                               _RangeToggles(
                                 selected: marketState.selectedRange,
-                                onChanged: (val) {
-                                  context.read<PublicMarketCubit>().load(
-                                    range: val,
-                                  );
-                                },
+                                onChanged: (val) => context.read<PublicMarketCubit>().load(range: val),
                               ),
                             ],
                           ),
-                          SizedBox(height: 8.h),
-                          _PriceTypeToggle(
-                            selectedType: _silverPriceType,
-                            onChanged: (type) {
-                              setState(() {
-                                _silverPriceType = type;
-                              });
-                            },
-                          ),
-                          SizedBox(height: 12.h),
-                          SimpleLineChart(
-                            seriesA:
-                                _silverPriceType == 'domestic'
-                                    ? chartDomesticSilverBuy
-                                    : chartWorldSilver,
-                            seriesB:
-                                _silverPriceType == 'domestic'
-                                    ? chartDomesticSilverSell
-                                    : const [],
-                          ),
-                          SizedBox(height: 10.h),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              _LegendDot(
-                                color: const Color(0xFF1976D2),
-                                label:
-                                    _silverPriceType == 'domestic'
-                                        ? 'Buy Price'
-                                        : 'International',
-                              ),
-                              if (_silverPriceType == 'domestic') ...[
-                                SizedBox(width: 16.w),
-                                _LegendDot(
-                                  color: const Color(0xFFE53935),
-                                  label: 'Sell Price',
-                                ),
-                              ],
-                            ],
+                          const SizedBox(height: 12),
+                          MarketBuySellChart(
+                            buySeries: chartDomesticSilverBuy,
+                            sellSeries: chartDomesticSilverSell,
+                            dates: marketState.silverHistory.map((s) => s.at).toList(),
+                            label: 'Phu Quy Silver Buy / Sell Live',
+                            unitLabel: 'VND',
+                            isLoading: marketState.isLoading,
+                            emptyText: 'No silver price history from API yet.',
                           ),
                         ],
                       ),
                     ),
-                    SizedBox(height: 12.h),
                   ],
-                  AppCard(
-                    child: Column(
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _SmallTab(label: 'Product', isActive: true),
-                            _SmallTab(label: 'Buy', isActive: false),
-                            _SmallTab(label: 'Sell', isActive: false),
-                          ],
-                        ),
-                        SizedBox(height: 12.h),
-                        if (vietnamSilverPrices.isEmpty)
-                          Text(
-                            'No market rows from API.',
-                            style: TextStyle(
-                              fontSize: 11.sp,
-                              color: Colors.black54,
-                            ),
-                          )
-                        else
-                          ...vietnamSilverPrices.map(
-                            (p) => _VietnamProductRow(price: p),
-                          ),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 6.h),
-                ] else ...[
+                ] else if (_tabIndex == 2) ...[
                   // Foreign Currency Tab
                   if (usdToVnd > 0) ...[
-                    AppCard(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Exchange Rate',
-                            style: TextStyle(
-                              fontSize: 10.sp,
-                              color: Colors.black54,
-                            ),
-                          ),
-                          SizedBox(height: 8.h),
-                          Row(
-                            children: [
-                              Text(
-                                '1 USD = ${NumberFormat('#,##0.00').format(usdToVnd)} VND',
-                                style: TextStyle(
-                                  fontSize: 14.sp,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              const Spacer(),
-                              if (!currencyPriceChange.isNaN)
-                                Text(
-                                  '${currencyPriceChange >= 0 ? '↑ +' : '↓ '}${currencyPriceChange.abs().toStringAsFixed(2)}%',
-                                  style: TextStyle(
-                                    fontSize: 11.sp,
-                                    fontWeight: FontWeight.w800,
-                                    color:
-                                        currencyPriceChange >= 0
-                                            ? Colors.green
-                                            : Colors.red,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ],
+                    const Text('MARKET INSIGHT BOARD', style: TextStyle(fontSize: 10, letterSpacing: 1.5, color: Colors.black54, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 4),
+                    const Text('FX: USD/VND Trend Dashboard', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.black87)),
+                    const SizedBox(height: 16),
+                    MarketMetricCards(
+                      metrics: buildForexMetrics(
+                        latestRate: usdToVnd,
+                        weeklyChange: currencyPriceChange,
+                        sessionRange: chartCurrency.isNotEmpty ? (chartCurrency.reduce((a, b) => a > b ? a : b) - chartCurrency.where((c) => c > 0).reduce((a, b) => a < b ? a : b)) : 0.0,
+                        domesticChange: currencyPriceChange,
                       ),
                     ),
-                    SizedBox(height: 12.h),
-                    if (chartCurrency.isNotEmpty &&
-                        chartCurrency.any((e) => e > 0)) ...[
+                    const SizedBox(height: 16),
+                    MarketChartPanel(
+                      topWidget: _RangeToggles(
+                        selected: marketState.selectedRange,
+                        onChanged: (val) => context.read<PublicMarketCubit>().load(range: val),
+                      ),
+                      leftSeries: chartCurrency,
+                      rightSeries: const [],
+                      bars: List.generate(chartCurrency.length, (i) => i.toDouble()), // Mock bars for FX momentum
+                      dates: marketState.currencyHistory.map((s) => s.at).toList(),
+                      leftLabel: 'USD/VND',
+                      rightLabel: '',
+                      barLabel: 'FX Momentum (%)',
+                      isLoading: marketState.isLoading,
+                      emptyText: 'No API FX history available yet.',
+                    ),
+                    SizedBox(height: 16.h),
+                    if (chartCurrency.isNotEmpty && chartCurrency.any((e) => e > 0)) ...[
                       AppCard(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -541,28 +424,22 @@ class _PublicMarketScreenState extends State<PublicMarketScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text(
-                                  'USD Trend',
-                                  style: TextStyle(
-                                    fontSize: 12.sp,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.black87,
-                                  ),
-                                ),
+                                const Text('Live Buy / Sell Trend', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                                 _RangeToggles(
                                   selected: marketState.selectedRange,
-                                  onChanged: (val) {
-                                    context.read<PublicMarketCubit>().load(
-                                      range: val,
-                                    );
-                                  },
+                                  onChanged: (val) => context.read<PublicMarketCubit>().load(range: val),
                                 ),
                               ],
                             ),
-                            SizedBox(height: 12.h),
-                            SimpleLineChart(
-                              seriesA: chartCurrency,
-                              seriesB: const [], // USD only has one series
+                            const SizedBox(height: 12),
+                            MarketBuySellChart(
+                              buySeries: chartCurrency,
+                              sellSeries: const [],
+                              dates: marketState.currencyHistory.map((s) => s.at).toList(),
+                              label: 'USD/VND Live Price Structure',
+                              unitLabel: 'VND',
+                              isLoading: marketState.isLoading,
+                              emptyText: 'No FX history from API yet.',
                             ),
                           ],
                         ),
@@ -572,6 +449,9 @@ class _PublicMarketScreenState extends State<PublicMarketScreen> {
                   ],
                   _CurrencyConverter(usdToVnd: usdToVnd),
                   SizedBox(height: 12.h),
+                ] else if (_tabIndex == 3) ...[
+                  // â”€â”€ News & Insights tab (FE: News.jsx) â”€â”€
+                  const _MarketNewsSection(),
                 ],
               ],
             ),
@@ -579,6 +459,36 @@ class _PublicMarketScreenState extends State<PublicMarketScreen> {
         ),
       ],
     );
+  }
+
+  double _getDelta(List<double> series) {
+    if (series.length < 2) return 0.0;
+    final curr = series.last;
+    final prev = series[series.length - 2];
+    if (prev == 0) return 0.0;
+    return ((curr - prev) / prev) * 100;
+  }
+
+  double _calcCorrelation(List<double> s1, List<double> s2) {
+    final n = min(s1.length, s2.length);
+    if (n < 2) return 0.0;
+
+    double sum1 = 0, sum2 = 0, sum1Sq = 0, sum2Sq = 0, sumP = 0;
+    for (int i = 0; i < n; i++) {
+      final x = s1[s1.length - n + i];
+      final y = s2[s2.length - n + i];
+      sum1 += x;
+      sum2 += y;
+      sum1Sq += x * x;
+      sum2Sq += y * y;
+      sumP += x * y;
+    }
+
+    final num = double.parse((n * sumP - sum1 * sum2).toStringAsFixed(10));
+    final den = sqrt((n * sum1Sq - sum1 * sum1) * (n * sum2Sq - sum2 * sum2));
+
+    if (den == 0) return 0.0;
+    return num / den;
   }
 }
 
@@ -603,9 +513,14 @@ class _MarketTabs extends StatelessWidget {
           onTap: () => onChanged(1),
         ),
         _HeaderTab(
-          label: 'Foreign Currency',
+          label: 'FX',
           isActive: currentIndex == 2,
           onTap: () => onChanged(2),
+        ),
+        _HeaderTab(
+          label: 'News',
+          isActive: currentIndex == 3,
+          onTap: () => onChanged(3),
         ),
       ],
     );
@@ -648,496 +563,6 @@ class _HeaderTab extends StatelessWidget {
   }
 }
 
-class _DomesticCard extends StatelessWidget {
-  final double domesticSellPrice;
-  final double domesticBuyPrice;
-  final double domesticPriceChange;
-
-  const _DomesticCard({
-    required this.domesticSellPrice,
-    required this.domesticBuyPrice,
-    required this.domesticPriceChange,
-  });
-
-  String _formatVND(double value) {
-    final str = value.toInt().toString();
-    final regex = RegExp(r'(\d)(?=(\d{3})+(?!\d))');
-    return str.replaceAllMapped(regex, (match) => '${match[1]},');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Domestic Price',
-            style: TextStyle(fontSize: 10.sp, color: Colors.black54),
-          ),
-          SizedBox(height: 6.h),
-          RichText(
-            text: TextSpan(
-              style: TextStyle(
-                fontSize: 12.sp,
-                color: Colors.black87,
-                fontWeight: FontWeight.w800,
-              ),
-              children: [
-                TextSpan(text: '${_formatVND(domesticSellPrice)} VND'),
-                TextSpan(
-                  text: '  / Ounce',
-                  style: TextStyle(
-                    fontSize: 10.sp,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black45,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(height: 10.h),
-          Row(
-            children: [
-              Text(
-                'Buy:',
-                style: TextStyle(fontSize: 10.sp, color: Colors.black54),
-              ),
-              SizedBox(width: 6.w),
-              Text(
-                '${_formatVND(domesticBuyPrice)} VND',
-                style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              Text(
-                'Change',
-                style: TextStyle(fontSize: 10.sp, color: Colors.black54),
-              ),
-              SizedBox(width: 6.w),
-              Text(
-                '${domesticPriceChange >= 0 ? '↑' : '↓'} ${domesticPriceChange.abs().toStringAsFixed(1)}%',
-                style: TextStyle(
-                  fontSize: 10.sp,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.red,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _WorldCard extends StatelessWidget {
-  final String metalType;
-  final double usdPrice;
-  final double vndPrice;
-  final double worldPriceChange;
-
-  const _WorldCard({
-    this.metalType = 'gold',
-    required this.usdPrice,
-    required this.vndPrice,
-    required this.worldPriceChange,
-  });
-
-  String _formatVND(double value) {
-    final str = value.toInt().toString();
-    final regex = RegExp(r'(\d)(?=(\d{3})+(?!\d))');
-    return str.replaceAllMapped(regex, (match) => '${match[1]},');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final label = metalType == 'silver' ? 'Silver Price' : 'Gold Price';
-    final usd = usdPrice;
-    final vnd = vndPrice;
-
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: TextStyle(fontSize: 10.sp, color: Colors.black54)),
-          SizedBox(height: 6.h),
-          RichText(
-            text: TextSpan(
-              style: TextStyle(
-                fontSize: 12.sp,
-                color: Colors.black87,
-                fontWeight: FontWeight.w800,
-              ),
-              children: [
-                TextSpan(text: '${usd.toStringAsFixed(2)} USD'),
-                TextSpan(
-                  text: ' / Ounce',
-                  style: TextStyle(
-                    fontSize: 10.sp,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black45,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(height: 10.h),
-          Row(
-            children: [
-              Text(
-                'Approx:',
-                style: TextStyle(fontSize: 10.sp, color: Colors.black45),
-              ),
-              SizedBox(width: 4.w),
-              Text(
-                '${_formatVND(vnd)} VND',
-                style: TextStyle(
-                  fontSize: 10.sp,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.black87,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 6.h),
-          Row(
-            children: [
-              Text(
-                'Change',
-                style: TextStyle(fontSize: 10.sp, color: Colors.black54),
-              ),
-              SizedBox(width: 4.w),
-              Text(
-                '${worldPriceChange >= 0 ? '↑ +' : '↓ '}${worldPriceChange.abs().toStringAsFixed(1)}%',
-                style: TextStyle(
-                  fontSize: 10.sp,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.green,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SpreadCard extends StatelessWidget {
-  final double gap;
-  final String risk;
-
-  const _SpreadCard({required this.gap, required this.risk});
-
-  String _formatVND(double value) {
-    final str = value.toInt().toString();
-    final regex = RegExp(r'(\d)(?=(\d{3})+(?!\d))');
-    return str.replaceAllMapped(regex, (match) => '${match[1]},');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AppCard(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 4.w,
-            height: 56.h,
-            decoration: BoxDecoration(
-              color: const Color(0xFFE53935),
-              borderRadius: BorderRadius.circular(99),
-            ),
-          ),
-          SizedBox(width: 10.w),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'SPREAD GAP',
-                  style: TextStyle(fontSize: 10.sp, color: Colors.black54),
-                ),
-                SizedBox(height: 6.h),
-                RichText(
-                  text: TextSpan(
-                    style: TextStyle(
-                      fontSize: 12.sp,
-                      color: Colors.black87,
-                      fontWeight: FontWeight.w800,
-                    ),
-                    children: [
-                      TextSpan(text: '${_formatVND(gap)} VND'),
-                      TextSpan(
-                        text: ' / Ounce',
-                        style: TextStyle(
-                          fontSize: 10.sp,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black45,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                SizedBox(height: 4.h),
-                Text(
-                  'Higher than average,\npotential risk',
-                  style: TextStyle(
-                    fontSize: 9.sp,
-                    color: Colors.black45,
-                    height: 1.2,
-                  ),
-                ),
-                SizedBox(height: 6.h),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE53935),
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                  child: Text(
-                    risk,
-                    style: TextStyle(
-                      fontSize: 9.sp,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LegendDot extends StatelessWidget {
-  final Color color;
-  final String label;
-
-  const _LegendDot({required this.color, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 8.w,
-          height: 8.w,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        SizedBox(width: 6.w),
-        Text(label, style: TextStyle(fontSize: 10.sp, color: Colors.black54)),
-      ],
-    );
-  }
-}
-
-class _SmallTab extends StatelessWidget {
-  final String label;
-  final bool isActive;
-
-  const _SmallTab({required this.label, required this.isActive});
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      label,
-      style: TextStyle(
-        fontSize: 10.sp,
-        fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
-        color: isActive ? Colors.black87 : Colors.black45,
-      ),
-    );
-  }
-}
-
-class _VietnamProductRow extends StatelessWidget {
-  final _MarketPrice price;
-
-  const _VietnamProductRow({required this.price});
-
-  String _formatVND(double value) {
-    final str = value.toInt().toString();
-    final regex = RegExp(r'(\d)(?=(\d{3})+(?!\d))');
-    return str.replaceAllMapped(regex, (match) => '${match[1]},');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final buy = price.buyPrice;
-    final sell = price.sellPrice;
-    final spread = (sell - buy).abs();
-    final spreadColor =
-        spread <= 500000
-            ? const Color(0xFF2E7D32)
-            : (spread <= 1500000
-                ? AppColors.primaryVariant
-                : const Color(0xFFE53935));
-
-    return Padding(
-      padding: EdgeInsets.only(bottom: 10.h),
-      child: Row(
-        children: [
-          Container(
-            width: 28.w,
-            height: 28.w,
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(8.r),
-            ),
-            child: Icon(
-              Icons.stars,
-              size: 16.w,
-              color: AppColors.primaryVariant,
-            ),
-          ),
-          SizedBox(width: 10.w),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  price.type,
-                  style: TextStyle(
-                    fontSize: 11.sp,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                SizedBox(height: 2.h),
-                Text(
-                  price.location,
-                  style: TextStyle(fontSize: 9.sp, color: Colors.black45),
-                ),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                '${_formatVND(buy)} VND',
-                style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w700),
-              ),
-              SizedBox(height: 2.h),
-              Row(
-                children: [
-                  Text(
-                    'Spread',
-                    style: TextStyle(fontSize: 9.sp, color: Colors.black45),
-                  ),
-                  SizedBox(width: 6.w),
-                  Text(
-                    _formatVND(spread),
-                    style: TextStyle(
-                      fontSize: 9.sp,
-                      fontWeight: FontWeight.w800,
-                      color: spreadColor,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          SizedBox(width: 10.w),
-          Text(
-            '${_formatVND(sell)} VND',
-            style: TextStyle(
-              fontSize: 10.sp,
-              fontWeight: FontWeight.w800,
-              color: Colors.black87,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PriceTypeToggle extends StatelessWidget {
-  final String selectedType;
-  final ValueChanged<String> onChanged;
-
-  const _PriceTypeToggle({required this.selectedType, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(8.r),
-      ),
-      padding: EdgeInsets.all(4.w),
-      child: Row(
-        children: [
-          Expanded(
-            child: _ToggleButton(
-              label: 'Domestic',
-              isSelected: selectedType == 'domestic',
-              onTap: () => onChanged('domestic'),
-            ),
-          ),
-          SizedBox(width: 4.w),
-          Expanded(
-            child: _ToggleButton(
-              label: 'International',
-              isSelected: selectedType == 'world',
-              onTap: () => onChanged('world'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ToggleButton extends StatelessWidget {
-  final String label;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _ToggleButton({
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(6.r),
-      child: Container(
-        padding: EdgeInsets.symmetric(vertical: 8.h),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.white : Colors.transparent,
-          borderRadius: BorderRadius.circular(6.r),
-          boxShadow:
-              isSelected
-                  ? [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                  : null,
-        ),
-        child: Text(
-          label,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 11.sp,
-            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-            color: isSelected ? AppColors.primary : Colors.black54,
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 List<double> _safeSeries(List<double> raw) {
   if (raw.length >= 2) return raw;
@@ -1156,7 +581,7 @@ class _CurrencyConverter extends StatefulWidget {
 
 class _CurrencyConverterState extends State<_CurrencyConverter> {
   final _controller = TextEditingController();
-  bool _isVndToUsd = true; // true = VND → USD, false = USD → VND
+  bool _isVndToUsd = true; // true = VND â†’ USD, false = USD â†’ VND
   double _result = 0.0;
 
   @override
@@ -1175,11 +600,11 @@ class _CurrencyConverterState extends State<_CurrencyConverter> {
 
     setState(() {
       if (_isVndToUsd) {
-        // VND → USD (input omits 3 zeros, multiply by 1000 to get actual value)
+        // VND â†’ USD (input omits 3 zeros, multiply by 1000 to get actual value)
         final actualVnd = input * 1000;
         _result = actualVnd / widget.usdToVnd;
       } else {
-        // USD → VND
+        // USD â†’ VND
         _result = input * widget.usdToVnd;
       }
     });
@@ -1335,9 +760,10 @@ class _RangeToggles extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ranges = [
-      {'label': '1W', 'val': '1w'},
-      {'label': '1M', 'val': '1m'},
-      {'label': '1Y', 'val': '1y'},
+      {'label': '1 Week', 'val': '1w'},
+      {'label': '1 Month', 'val': '1m'},
+      {'label': '6 Months', 'val': '6m'},
+      {'label': '1 Year', 'val': '1y'},
     ];
 
     return Row(
@@ -1347,26 +773,170 @@ class _RangeToggles extends StatelessWidget {
             return GestureDetector(
               onTap: () => onChanged(r['val']!),
               child: Container(
-                margin: EdgeInsets.only(left: 6.w),
-                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                margin: EdgeInsets.only(right: 6.w),
+                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
                 decoration: BoxDecoration(
-                  color: isActive ? AppColors.primary : Colors.transparent,
-                  borderRadius: BorderRadius.circular(4.r),
+                  color: isActive ? const Color(0xFFF0FBFF) : Colors.white,
+                  borderRadius: BorderRadius.circular(6.r),
                   border: Border.all(
-                    color: isActive ? AppColors.primary : Colors.black12,
+                    color: isActive ? const Color(0xFF06B6D4) : const Color(0xFFE2E8F0),
                   ),
                 ),
                 child: Text(
                   r['label']!,
                   style: TextStyle(
-                    fontSize: 9.sp,
-                    fontWeight: FontWeight.w700,
-                    color: isActive ? Colors.white : Colors.black45,
+                    fontSize: 10.sp,
+                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                    color: isActive ? const Color(0xFF0369A1) : const Color(0xFF64748B),
                   ),
                 ),
               ),
             );
           }).toList(),
+    );
+  }
+}
+
+
+
+/// News & Market Insights Section â€” mirrors FE's News.jsx
+class _MarketNewsSection extends StatefulWidget {
+  const _MarketNewsSection();
+
+  @override
+  State<_MarketNewsSection> createState() => _MarketNewsSectionState();
+}
+
+class _MarketNewsSectionState extends State<_MarketNewsSection> {
+  String _selectedCategory = "All";
+  String _search = "";
+  int _page = 0;
+  static const _pageSize = 8;
+
+  List<NewsArticle> get _filtered {
+    return newsData.where((a) {
+      final catMatch = _selectedCategory == "All" || a.category == _selectedCategory;
+      final q = _search.toLowerCase();
+      final textMatch = q.isEmpty || a.title.toLowerCase().contains(q) || a.summary.toLowerCase().contains(q);
+      return catMatch && textMatch;
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _filtered;
+    final paged = filtered.skip(_page * _pageSize).take(_pageSize).toList();
+    final totalPages = (filtered.length / _pageSize).ceil();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(height: 20.h),
+        Text("Market News & Insights", style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w800)),
+        SizedBox(height: 4.h),
+        Text("Latest news from Reuters and Investing.com on Gold, Silver, Exchange Rates & Oil", style: TextStyle(fontSize: 12.sp, color: Colors.black54)),
+        SizedBox(height: 16.h),
+        Container(
+          height: 44.h,
+          decoration: BoxDecoration(color: Colors.white, border: Border.all(color: const Color(0xFFDDD6CC)), borderRadius: BorderRadius.circular(10.r)),
+          padding: EdgeInsets.symmetric(horizontal: 12.w),
+          child: Row(children: [
+            const Icon(Icons.search, size: 18, color: Colors.black38),
+            SizedBox(width: 8.w),
+            Expanded(child: TextField(
+              onChanged: (v) => setState(() { _search = v; _page = 0; }),
+              decoration: InputDecoration(border: InputBorder.none, hintText: "Search news...", hintStyle: TextStyle(fontSize: 13.sp, color: Colors.black38), isCollapsed: true),
+              style: TextStyle(fontSize: 13.sp),
+            )),
+          ]),
+        ),
+        SizedBox(height: 12.h),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: newsCategories.map((cat) {
+            final active = _selectedCategory == cat;
+            return GestureDetector(
+              onTap: () => setState(() { _selectedCategory = cat; _page = 0; }),
+              child: Container(
+                margin: EdgeInsets.only(right: 8.w),
+                padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
+                decoration: BoxDecoration(
+                  color: active ? const Color(0xFF2C1F0E) : Colors.white,
+                  border: Border.all(color: active ? const Color(0xFF2C1F0E) : const Color(0xFFDDD6CC)),
+                  borderRadius: BorderRadius.circular(20.r),
+                ),
+                child: Text(cat, style: TextStyle(fontSize: 12.sp, fontWeight: FontWeight.w600, color: active ? Colors.white : Colors.black87)),
+              ),
+            );
+          }).toList()),
+        ),
+        SizedBox(height: 16.h),
+        if (paged.isEmpty)
+          Padding(padding: EdgeInsets.symmetric(vertical: 32.h), child: Center(child: Text("No articles found.", style: TextStyle(fontSize: 13.sp, color: Colors.black45))))
+        else
+          ...paged.map((a) => _NewsCard(article: a)),
+        if (totalPages > 1) ...[
+          SizedBox(height: 8.h),
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            IconButton(onPressed: _page > 0 ? () => setState(() => _page--) : null, icon: const Icon(Icons.chevron_left)),
+            Text("${_page + 1} / $totalPages", style: TextStyle(fontSize: 13.sp)),
+            IconButton(onPressed: _page < totalPages - 1 ? () => setState(() => _page++) : null, icon: const Icon(Icons.chevron_right)),
+          ]),
+        ],
+        SizedBox(height: 24.h),
+      ],
+    );
+  }
+}
+
+class _NewsCard extends StatelessWidget {
+  final NewsArticle article;
+  const _NewsCard({required this.article});
+
+  static const _catBg = {"Gold": Color(0xFFFEF9C3), "Silver": Color(0xFFF1F5F9), "Exchange Rate": Color(0xFFEFF6FF), "Oil": Color(0xFFFEF3C7)};
+  static const _catFg = {"Gold": Color(0xFF854D0E), "Silver": Color(0xFF334155), "Exchange Rate": Color(0xFF1E40AF), "Oil": Color(0xFF92400E)};
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = _catBg[article.category] ?? const Color(0xFFF8F8F6);
+    final fg = _catFg[article.category] ?? Colors.black87;
+    return GestureDetector(
+      onTap: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(article.link, maxLines: 2, overflow: TextOverflow.ellipsis))),
+      child: Container(
+        margin: EdgeInsets.only(bottom: 14.h),
+        decoration: BoxDecoration(color: Colors.white, border: Border.all(color: const Color(0xFFEEE8DF)), borderRadius: BorderRadius.circular(14.r), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 4)]),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          ClipRRect(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(14.r)),
+            child: Container(
+              height: 100.h,
+              decoration: BoxDecoration(gradient: LinearGradient(colors: [const Color(0xFF4A3B2A).withOpacity(0.85), const Color(0xFF2C1F0E).withOpacity(0.6)], begin: Alignment.topLeft, end: Alignment.bottomRight)),
+              child: Center(child: Text(article.category == "Gold" ? "â—ˆ" : article.category == "Silver" ? "â—‡" : article.category == "Oil" ? "â›½" : "\$", style: const TextStyle(fontSize: 40, color: Colors.white70))),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.all(14.w),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Container(padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h), decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6.r)), child: Text(article.category, style: TextStyle(fontSize: 10.sp, fontWeight: FontWeight.w700, color: fg))),
+                const Spacer(),
+                Text(article.date, style: TextStyle(fontSize: 10.sp, color: Colors.black38)),
+                if (article.readTime != null) Text(" Â· ${article.readTime}", style: TextStyle(fontSize: 10.sp, color: Colors.black38)),
+              ]),
+              SizedBox(height: 8.h),
+              Text(article.title, style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700, color: Colors.black, height: 1.4), maxLines: 2, overflow: TextOverflow.ellipsis),
+              SizedBox(height: 6.h),
+              Text(article.summary, style: TextStyle(fontSize: 12.sp, color: Colors.black54, height: 1.6), maxLines: 3, overflow: TextOverflow.ellipsis),
+              SizedBox(height: 10.h),
+              Row(children: [
+                Container(padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h), decoration: BoxDecoration(color: const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(6.r)), child: Text(article.source, style: TextStyle(fontSize: 10.sp, color: Colors.black54, fontWeight: FontWeight.w600))),
+                SizedBox(width: 8.w),
+                Expanded(child: Text("by ${article.author}", style: TextStyle(fontSize: 10.sp, color: Colors.black38), overflow: TextOverflow.ellipsis)),
+                Text("Read â†’", style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w700, color: const Color(0xFF2C1F0E))),
+              ]),
+            ]),
+          ),
+        ]),
+      ),
     );
   }
 }

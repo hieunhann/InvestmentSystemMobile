@@ -7,8 +7,10 @@ import 'package:my_flutter_app/features/app/bloc/public_market_cubit.dart';
 import 'package:my_flutter_app/features/app/presentation/screens/record_transaction_screen.dart';
 import 'package:my_flutter_app/features/app/presentation/widgets/app_card.dart';
 import 'package:my_flutter_app/features/app/presentation/widgets/app_header.dart';
+import 'package:my_flutter_app/features/app/presentation/widgets/portfolio_analytics_widget.dart';
 import 'package:my_flutter_app/constants/app_colors.dart';
 import 'package:my_flutter_app/features/auth/bloc/auth_cubit.dart';
+
 
 class PortfolioScreen extends StatefulWidget {
   const PortfolioScreen({super.key});
@@ -235,6 +237,10 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                               ),
                             )
                             .toList(),
+                      // ── AI Analytics section (mirrors FE's PortfolioAnalytics) ──
+                      SizedBox(height: 8.h),
+                      const Divider(height: 1),
+                      PortfolioAnalyticsWidget(userId: userId),
                     ],
                   ),
                 ),

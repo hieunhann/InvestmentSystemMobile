@@ -37,6 +37,11 @@ class GoldPriceInternational {
     return silverPrice * usdToVndRate;
   }
 
+  double silverPricePerKgInVND(double usdToVndRate) {
+    // 1 kg = 32.1507 troy ounces
+    return silverPrice * usdToVndRate * 32.1507;
+  }
+
   double silverPricePerTaelInVND(double usdToVndRate) {
     return silverPrice * usdToVndRate * 1.20565;
   }
